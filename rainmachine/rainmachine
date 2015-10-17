@@ -22,7 +22,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# import json
+import json
+import requests
+
 import configparser
 
 from cement.core.foundation import CementApp
@@ -77,12 +79,19 @@ HELP_FILE = """
 Name of backupfile. Default is name of the rainmachine controller.
 """
 
+DEFAULT_PORT = 443
+
 # Default settings
 from cement.utils.misc import init_defaults
 
 defaults = init_defaults('rainmachine', 'rainmachine')
-defaults['rainmachine']['tbd'] = False
-
+defaults['rainmachine']['host'] = 'localhost'
+defaults['rainmachine']['port'] = DEFAULT_PORT
+defaults['rainmachine']['user'] = 'admin'
+defaults['rainmachine']['password'] = 'admin'
+defaults['rainmachine']['backup'] = True
+defaults['rainmachine']['restore'] = False
+defaults['rainmachine']['file'] = None
 
 # Cleanly catch missing mandatory config settings if needed
 class RainMachineConfigHandler(ConfigParserConfigHandler):
@@ -106,10 +115,10 @@ class RainMachineBaseController(CementBaseController):
         arguments = [
             (['--host', '--rainmachine'],
              dict(action='store', help=HELP_HOST, dest='host')),
-            (['-u', '--user'],
-             dict(action='store', help=HELP_USER, dest='user')),
+            # (['-u', '--user'],
+            #  dict(action='store', help=HELP_USER, dest='user')),
             (['-p', '--password'],
-             dict(action='store', help=HELP_PASS, dest='pass')),
+             dict(action='store', help=HELP_PASS, dest='password')),
             (['-b', '--backup'],
              dict(action='store_true', help=HELP_BACKUP, dest='backup')),
             (['-r', '--restore'],
@@ -152,10 +161,135 @@ class RainMachineApp(CementApp):
         self.log.debug('running setup()')
 
 
+class RainMachine:
+    'RainMachine Interface Class'
+
+    def __init__(self, host, port=443, password='admin', remember=True,
+                 secure=True):
+        self._host = host
+        self._port = port
+        self._basepath = 'https://' + self._host + ':' + (str)(self._port)
+        self._secure = secure
+        self._password = password
+        self._remember = remember
+        self._token = None
+        self._session = requests.session()
+        self._version = {}
+
+    def connect(self):
+        # First get version info
+        self.getVersion()
+
+        # Then login
+        r = self._session.post(self._basepath + '/api/4/auth/login',
+                              json={'pwd': self._password,
+                                    'remember': self._remember},
+                              verify=self._secure)
+
+        login_data = r.json()
+        self._token = login_data['access_token']
+
+        return r
+
+    def getVersion(self):
+        # First get version info
+        r = self._session.get(self._basepath + '/api/4/apiVer',
+                              verify=self._secure)
+
+        self._version = r.json()
+
+        return self._version
+
+    def getProvisionName(self):
+        # First get version info
+        r = self._session.get(self._basepath + '/api/4/provision/name',
+                              verify=self._secure)
+
+        return r.json()['name']
+
+    def getProvisionCloud(self):
+        r = self._session.get(self._basepath +
+                              '/api/4/provision/cloud?access_token=%s' %
+                              self._token,
+                              verify=self._secure)
+
+        return r.json()
+
+    def getZoneProperties(self):
+        r = self._session.get(self._basepath +
+                              '/api/4/zone/properties?access_token=%s' %
+                              self._token,
+                              verify=self._secure)
+
+        return r.json()
+
+    def getPrograms(self):
+        r = self._session.get(self._basepath +
+                              '/api/4/program?access_token=%s' %
+                              self._token,
+                              verify=self._secure)
+
+        return r.json()
+
+    @property
+    def host(self):
+        return self._host
+
+    @property
+    def port(self):
+        return self._port
+
+    @property
+    def basepath(self):
+        return self._basepath
+
+    @property
+    def secure(self):
+        return self._secure
+
+    @property
+    def remember(self):
+        return self._remember
+
+    @property
+    def version(self):
+        return self._version
+
+
+
 with RainMachineApp() as app:
     app.run()
 
-    try:
-        app.run_forever()
-    except (KeyboardInterrupt, SystemExit, CaughtSignal):
-        pass
+    data = {}
+
+    if app.config.get('rainmachine', 'backup') is True:
+        machine = RainMachine(host=app.config.get('rainmachine', 'host'),
+                              port=app.config.get('rainmachine', 'port'),
+                              password=app.config.get('rainmachine', 'password'),  # noqa
+                              secure=False)
+
+        machine.connect()
+
+        data['host'] = machine.host
+        data['version'] = machine.version
+        data['name'] = machine.getProvisionName()
+        data['cloud'] = machine.getProvisionCloud()
+        data.update(machine.getZoneProperties())
+        data.update(machine.getPrograms())
+
+        app.log.info(json.dumps(data))
+
+        filename = app.config.get('rainmachine', 'file')
+        if filename is None:
+            filename = machine.host + '.json'
+
+        with open(filename, 'w') as data_file:
+            json.dump(data, data_file, indent=2, sort_keys=True)
+
+    elif app.config.get('rainmachine', 'restore') is True:
+        filename = app.config.get('rainmachine', 'file')
+        if filename is None:
+            filename = machine.host + '.json'
+
+        with open(filename, 'r') as data_file:
+            json.load(data, data_file)

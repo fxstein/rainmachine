@@ -41,7 +41,7 @@ if (sys.version_info[0] == 2 and sys.version_info[1] < 7):
     sys.exit(1)
 
 sys.path.insert(0, os.path.abspath('rainmachine'))
-from pubkey import __version__, __author__, __email__, __license__
+from rainmachine import __version__, __author__, __email__, __license__
 
 # For development versions add current timestamp of build. We could use git
 # but that would required a commit for every change before being able to test
@@ -113,6 +113,7 @@ setup(
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=[
         'cement>=2.6.0',
+        'requests>=2.6.0',
         'colorlog>=2.6.0',
     ],
 
